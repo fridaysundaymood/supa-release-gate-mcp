@@ -21,7 +21,7 @@ try {
       '--workdir',
       workdir,
       '-x',
-      'studio,imgproxy,edge-runtime,logflare,vector,supavisor',
+      'studio,imgproxy,edge-runtime,logflare,vector,supavisor,realtime,storage-api,gotrue,kong,mailpit,postgrest,postgres-meta',
     ]) === 0
   ) {
     status = run(
