@@ -1,0 +1,7 @@
+# Security
+
+Report suspected vulnerabilities privately to the repository maintainers; do not include credentials or production data in an issue.
+
+The gate protects only operations routed through it, not direct provider access. Approval uses a passphrase-encrypted human signing key and a human-operated terminal; never disclose the passphrase to an agent. This can prevent accidental or injected approval through the MCP interface, but a fully malicious process running under the same OS account is not contained: it can manipulate local files, interfere with terminal input, or use provider credentials directly. For a stronger boundary, run the executor under a separate OS identity or service with protected code, configuration, approval keys, persistent state, and provider credentials; ensure the agent cannot impersonate that identity. A shared account is not an adequate boundary against a malicious local agent.
+
+Use least-privilege credentials and keep their values out of configuration, plans, logs, and ledger. The hash chain detects modifications within the retained ledger but not deletion or wholesale replacement. Independently retain and authenticate chain heads for stronger tamper evidence. A gate target lock does not prevent out-of-band changes; use provider preconditions where available, and recognize the residual race otherwise. Never retry an uncertain write without reconciliation.

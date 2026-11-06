@@ -1,0 +1,24 @@
+project_id = "ak-release"
+
+[api]
+port = 56321
+
+[db]
+port = 56322
+shadow_port = 56328
+major_version = 15
+
+[db.seed]
+enabled = false
+
+[studio]
+port = 56323
+
+[inbucket]
+port = 56324
+
+[analytics]
+port = 56327
+
+[db.pooler]
+port = 56329

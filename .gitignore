@@ -8,6 +8,11 @@ node_modules/
 dist/
 build/
 coverage/
+.android-kit/
+.release-authority/
+.release-approvals/
+test/fixtures/local/supabase/migrations/
+test/fixtures/local/supabase/.temp/
 
 # Local logs and OS/editor files
 *.log

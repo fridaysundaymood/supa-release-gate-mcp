@@ -1,6 +1,6 @@
 # Release Gate MCP: implementation plan
 
-**Status: planning; not implemented.**
+**Status: implementation present; local Supabase and live-provider verification remain subject to the integration environment and credentials.**
 
 ## Problem and goal
 
@@ -22,12 +22,12 @@ Immediately before execution, acquire a single-flight lock keyed by provider and
 
 Supabase is the first-class M1 adapter. Each adapter owns provider-specific commands, supported versions, dry run, execution, verification and rollback guidance. An operation without a genuine dry run must show an accurate before/after diff or disclose the limitation before approval; never present execution as a dry run.
 
-| Provider | Planned operations | Milestone |
-|---|---|---|
-| Supabase | Database push with pending-migration dry run, read-only SQL checks; function deploy and secrets by reference | M1: database push and read-only checks; later: functions and secret references |
-| Google Play | Preflight, upload to track, release notes, rollout percentage, halt, promote; read tracks, vitals and reviews | M2 |
-| Cloudflare | Pages deploy from a committed directory; DNS and routing changes with before/after diffs | M3 |
-| Google Cloud | IAM read/diff and bindings; API enable/disable using supported dry runs or policy diffs | M3 and later |
+| Provider     | Planned operations                                                                                            | Milestone                                                                      |
+| ------------ | ------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Supabase     | Database push with pending-migration dry run, read-only SQL checks; function deploy and secrets by reference  | M1: database push and read-only checks; later: functions and secret references |
+| Google Play  | Preflight, upload to track, release notes, rollout percentage, halt, promote; read tracks, vitals and reviews | M2                                                                             |
+| Cloudflare   | Pages deploy from a committed directory; DNS and routing changes with before/after diffs                      | M3                                                                             |
+| Google Cloud | IAM read/diff and bindings; API enable/disable using supported dry runs or policy diffs                       | M3 and later                                                                   |
 
 The Supabase adapter handles non-interactive hosted-write requirements, uses read-only credentials and mode for checks, and avoids deprecated CLI options. For Play, create an edit, stage the intended changes, call [edits.validate](https://developers.google.com/android-publisher/api-ref/rest/v3/edits/validate), and do not commit it during dry run. Validation is not a release or a guarantee of later commit; recheck state and validate the execution edit before committing. Staging may upload artifacts and create an uncommitted edit; disclose those effects and clean up or let the edit expire.
 
@@ -47,17 +47,17 @@ On restart, acquire the target lock and reconcile any intent without a durable o
 
 The core library is the source of behavior; the CLI exposes every agent-accessible operation, and the MCP adapter exposes tools over stdio without client-specific requirements. Optional MCP features such as progress or elicitation degrade gracefully; without a trusted approval channel, approval remains blocked rather than bypassed. Ship plain Markdown `SKILL.md` files with frontmatter and an `AGENTS.md` snippet, usable by any agent; each agent-facing skill step names its CLI command and MCP equivalent. The human-only approval step names `release approve` and explicitly has no MCP equivalent.
 
-| CLI command | MCP tool |
-|---|---|
-| `release plan` | `release_plan_change` |
-| `release dry-run` | `release_dry_run` |
+| CLI command               | MCP tool                  |
+| ------------------------- | ------------------------- |
+| `release plan`            | `release_plan_change`     |
+| `release dry-run`         | `release_dry_run`         |
 | `release approval-status` | `release_approval_status` |
-| `release execute` | `release_execute` |
-| `release verify` | `release_verify` |
-| `release ledger list` | `release_ledger_list` |
-| `release ledger render` | `release_ledger_render` |
-| `release status` | `release_status` |
-| `release doctor` | `release_doctor` |
+| `release execute`         | `release_execute`         |
+| `release verify`          | `release_verify`          |
+| `release ledger list`     | `release_ledger_list`     |
+| `release ledger render`   | `release_ledger_render`   |
+| `release status`          | `release_status`          |
+| `release doctor`          | `release_doctor`          |
 
 Every command supports `--json`, emitting the published `kit-schema` v1 JSON Schema envelope: `{ schema_version: "1", tool, operation, run_id, status: pass|fail|flaky|blocked|unsupported|error, classification?: app|test|environment|config, summary, evidence[], artifacts[], started_at, duration_ms }`. `fail` means the thing under test failed; `error` means the tool failed; `blocked` means a precondition or policy refused; `unsupported` means a capability is unavailable and is never silently skipped. Exit codes are 0 for pass, 1 for fail or flaky, and 2 for error, blocked, or unsupported. MCP returns the same envelope.
 
