@@ -129,9 +129,51 @@ export class ReleaseInterfaces {
       else if (operation === 'ledger-list') data = await this.gate.ledger();
       else if (operation === 'ledger-render')
         data = renderChangelog(await this.gate.ledger());
-      else if (operation === 'status')
-        data = { ledgerEntries: (await this.gate.ledger()).length };
-      else if (operation === 'doctor') data = await doctor(this.config);
+      else if (operation === 'status') {
+        const entries = await this.gate.ledger();
+        const pending = new Map<
+          string,
+          {
+            planHash: string;
+            target: string;
+            status: string;
+            expiresAt: string | null;
+          }
+        >();
+        for (const entry of entries) {
+          const record = object(entry.data);
+          if (entry.type === 'plan') {
+            const plan = object(record.plan);
+            const planHash = String(record.hash);
+            pending.set(planHash, {
+              planHash,
+              target: String(plan.target),
+              status: 'planned',
+              expiresAt:
+                typeof plan.expiresAt === 'string' ? plan.expiresAt : null,
+            });
+          } else if (entry.type === 'dry-run') {
+            const plan = pending.get(String(record.planHash));
+            if (plan) plan.status = 'awaiting-approval';
+          } else if (entry.type === 'intent') {
+            pending.delete(String(record.planHash));
+          }
+        }
+        for (const plan of pending.values()) {
+          try {
+            const approval = JSON.parse(
+              await readFile(this.approvalPath(plan.planHash), 'utf8'),
+            ) as Approval;
+            plan.expiresAt = approval.expiresAt;
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+          }
+        }
+        data = {
+          ledgerEntries: entries.length,
+          pendingPlans: [...pending.values()],
+        };
+      } else if (operation === 'doctor') data = await doctor(this.config);
       else {
         const hash = hashArg(input.planHash);
         const plan = await this.planFor(hash);

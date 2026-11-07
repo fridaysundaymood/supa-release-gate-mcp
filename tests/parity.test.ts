@@ -108,6 +108,10 @@ describe('CLI and MCP parity', () => {
       const created = await cli(['plan', planPath], configPath);
       expect(created.code).toBe(0);
       const hash = created.result.evidence[0].planHash;
+      const planned = await mcp(client, 'release_status');
+      expect(planned.result.evidence[0].pendingPlans).toEqual([
+        { planHash: hash, target: 'app', status: 'planned', expiresAt: null },
+      ]);
       const approvalCli = await cli(['approval-status', hash], configPath);
       const approvalMcp = await mcp(client, 'release_approval_status', {
         planHash: hash,
@@ -120,6 +124,15 @@ describe('CLI and MCP parity', () => {
       const dry = await mcp(client, 'release_dry_run', { planHash: hash });
       expect(dry.isError).toBe(false);
       expect(dry.result.status).toBe('pass');
+      const pending = await mcp(client, 'release_status');
+      expect(pending.result.evidence[0].pendingPlans).toEqual([
+        {
+          planHash: hash,
+          target: 'app',
+          status: 'awaiting-approval',
+          expiresAt: null,
+        },
+      ]);
       const listing = await cli(['ledger', 'list'], configPath);
       expect(
         listing.result.evidence[0].some(
