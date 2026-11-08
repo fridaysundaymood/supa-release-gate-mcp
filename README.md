@@ -2,6 +2,18 @@
 
 Release Gate routes supported changes through plan, dry run, human approval, execution, verification and a hash-chained ledger. It is a Node.js 24 TypeScript library, CLI and tools-only MCP server. It does not prevent direct provider access.
 
+The release workflow records plans, dry runs and execution outcomes in the ledger, with approval performed separately by a human.
+
+```mermaid
+flowchart LR
+    Plan["Plan change"] --> Dry["Inspect and dry run"]
+    Dry --> Approval["Human approval"]
+    Approval --> Execute["Execute and verify under target lock"]
+    Plan -.-> Ledger["Hash-chained ledger"]
+    Dry -.-> Ledger
+    Execute -.-> Ledger
+```
+
 ## Installation
 
 Install `@budaknyenyel/supa-release-gate-mcp` from npm, or clone `android-kit`, `kit-fixture-app` and this repository as siblings for local development. Build the shared schema, install and build this project:
