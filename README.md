@@ -68,6 +68,35 @@ node dist/cli/index.js ledger render --json
 
 A generic MCP client can launch `release-mcp` with the host configuration path, or set `RELEASE_GATE_CONFIG` in its launch environment. Run it with the project as its working directory. MCP exposes `release_plan_change`, `release_dry_run`, `release_approval_status`, `release_execute`, `release_verify`, `release_recover`, `release_ledger_list`, `release_ledger_render`, `release_status` and `release_doctor`; it does not expose approval or key creation.
 
+## Who can approve
+
+Approval is a separate human action, not an MCP tool. The terminal and passphrase must be protected from the agent; TTY checks alone do not establish that boundary.
+
+```mermaid
+sequenceDiagram
+    actor Human
+    participant CLI as Release CLI
+    participant Gate as Release gate
+    participant Store as Approval store
+    Human->>CLI: release approve HASH
+    CLI->>CLI: Require stdin and stdout TTY and reject CI or MCP_SERVER
+    alt Terminal check fails
+        CLI-->>Human: Refuse approval
+    else Terminal check passes
+        CLI->>Gate: Load plan and latest dry run
+        Gate-->>Human: Display full plan and dry-run evidence
+        Human->>CLI: Enter key passphrase
+        CLI-->>Human: Display signed approval payload
+        Human->>CLI: Type exact target
+        alt Target mismatch or untrusted key
+            CLI-->>Human: Refuse approval
+        else Target matches and key is trusted
+            Gate->>Store: Save signed approval
+        end
+    end
+    Note over Gate,Store: Execution rechecks approval and evidence under target lock
+```
+
 ## Trust and recovery
 
 The human must keep the key passphrase private. TTY checks and encrypted keys protect the workflow only when the agent cannot access the passphrase or control the terminal. They are not protection from a fully malicious process running as the same OS user. For stronger isolation run the executor and credentials under a separate OS identity, protect the gate executable, config, trust store and state with OS ACLs, and configure `externalExecutor` as the protected executable. It receives JSON `{plan, approval}` on stdin and must independently authenticate approval and recheck provider state; the invoking process cannot enforce the executable's OS boundary. See [SECURITY.md](SECURITY.md).
