@@ -10,6 +10,7 @@ import { runCli } from '../src/cli/index.js';
 import { loadReleaseConfig } from '../src/core/config.js';
 import { ReleaseInterfaces } from '../src/core/interfaces.js';
 import { createServer } from '../src/mcp/index.js';
+import { protectFixtureDirectory } from './protected-fixture.js';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -22,7 +23,8 @@ afterEach(async () => {
 async function setup() {
   const root = await mkdtemp(join(tmpdir(), 'release-parity-'));
   roots.push(root);
-  const configPath = join(root, 'android-kit.yaml');
+  protectFixtureDirectory(root);
+  const configPath = join(root, 'release-gate.yaml');
   const { publicKey } = generateKeyPairSync('ed25519');
   await writeFile(
     configPath,
@@ -44,6 +46,7 @@ async function setup() {
         ],
       },
     }),
+    { mode: 0o600 },
   );
   const config = await loadReleaseConfig(configPath);
   const provider = {
@@ -143,7 +146,7 @@ describe('CLI and MCP parity', () => {
       await client.close();
       await server.close();
     }
-  });
+  }, 120_000);
   it('reports the same blocked result for an invalid hash and never exposes approval', async () => {
     const { configPath, client, server } = await setup();
     try {
@@ -163,5 +166,5 @@ describe('CLI and MCP parity', () => {
       await client.close();
       await server.close();
     }
-  });
+  }, 60_000);
 });

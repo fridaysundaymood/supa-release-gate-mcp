@@ -97,26 +97,14 @@ export type PagesDeployOptions = {
   token: string;
   branch?: string;
   wrangler?: string;
+  commit: string;
 };
 /** Deploy a clean, tracked directory with Wrangler's Direct Upload implementation. */
 export async function deployPages(
   options: PagesDeployOptions,
 ): Promise<{ stdout: string; stderr: string; commit: string }> {
   const cwd = options.directory;
-  const status = await exec(
-    'git',
-    ['status', '--porcelain', '--ignored', '--untracked-files=all', '--', '.'],
-    { cwd },
-  );
-  if (status.stdout.trim())
-    throw new Error(
-      'Pages directory contains uncommitted, untracked, or ignored files',
-    );
-  const tracked = await exec('git', ['ls-files', '--', '.'], { cwd });
-  if (!tracked.stdout.trim())
-    throw new Error('Pages directory has no tracked files');
-  const revision = await exec('git', ['rev-parse', 'HEAD'], { cwd });
-  const commit = revision.stdout.trim();
+  const commit = options.commit;
   const args = [
     'pages',
     'deploy',

@@ -1,0 +1,43 @@
+name: Publish package
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+jobs:
+  publish:
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          path: supa-release-gate-mcp
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require tag on main
+        working-directory: supa-release-gate-mcp
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          repository: fridaysundaymood/android-kit
+          path: android-kit
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - run: npm ci --include-workspace-root --workspace=@budaknyenyel/kit-schema && npm run build --workspace=@budaknyenyel/kit-schema
+        working-directory: android-kit
+      - run: npm ci && npm run lint && npm run build && npm test
+        working-directory: supa-release-gate-mcp
+      - id: prepare
+        run: npm run prepare-publish
+        working-directory: supa-release-gate-mcp
+      - run: npm publish "$PUBLISH_DIRECTORY" --access public --provenance
+        working-directory: supa-release-gate-mcp
+        env:
+          PUBLISH_DIRECTORY: ${{ steps.prepare.outputs.directory }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

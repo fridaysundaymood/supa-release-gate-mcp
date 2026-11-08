@@ -6,7 +6,7 @@ import {
   newRunId,
   type Result,
   writeArtifactIndex,
-} from '@android-kit/schema';
+} from '@budaknyenyel/kit-schema';
 import { promptApproval } from './approver.js';
 import type { ReleaseConfig } from './config.js';
 import { type DoctorResult, doctor } from './doctor.js';
@@ -15,6 +15,7 @@ import {
   type Approval,
   Gate,
   hashJson,
+  MAX_APPROVAL_LIFETIME_MS,
   type Plan,
   type Provider,
   renderChangelog,
@@ -85,19 +86,28 @@ export class ReleaseInterfaces {
       .reverse()
       .find((e) => e.type === 'dry-run' && object(e.data).planHash === hash);
     if (!dry) throw new Error('Dry run required');
+    const issuedAt = new Date();
+    const expiry = Date.parse(expiresAt);
     if (
-      !Number.isFinite(Date.parse(expiresAt)) ||
-      Date.parse(expiresAt) <= Date.now()
+      !Number.isFinite(expiry) ||
+      expiry <= issuedAt.getTime() ||
+      expiry - issuedAt.getTime() > MAX_APPROVAL_LIFETIME_MS
     )
       throw new Error('Invalid approval expiry');
     const payload = {
+      kind: 'release-gate-approval-v1' as const,
+      gateId: await this.gate.gateId(),
       planHash: hash,
       target: plan.target,
       evidenceHash: String(object(dry.data).evidenceHash),
       policyId: plan.policy.id,
+      issuedAt: issuedAt.toISOString(),
       expiresAt,
       nonce: randomBytes(32).toString('hex'),
     };
+    process.stderr.write(
+      `${JSON.stringify({ plan, dryRun: dry.data }, null, 2)}\n`,
+    );
     const approval = await promptApproval(keyDirectory, payload);
     if (!this.config.trustedPublicKeys[approval.keyId])
       throw new Error('Approval key is not trusted by the gate');

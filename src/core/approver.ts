@@ -18,7 +18,7 @@ import { type Approval, canonicalJson, type Resolution } from './gate.js';
 export type ApprovalPayload = Omit<Approval, 'signature' | 'keyId'>;
 export type ResolutionPayload = Omit<Resolution, 'signature' | 'keyId'>;
 interface KeyFile {
-  version: 1;
+  version: 2;
   keyId: string;
   publicKey: string;
   salt: string;
@@ -36,8 +36,10 @@ export async function initApprover(
   directory: string,
   passphrase: string,
 ): Promise<{ keyId: string; publicKey: string }> {
-  if (!directory || !passphrase)
-    throw new Error('A private directory and nonempty passphrase are required');
+  if (!directory || passphrase.length < 20 || new Set(passphrase).size < 8)
+    throw new Error(
+      'A private directory and a passphrase of at least 20 characters with 8 distinct characters are required',
+    );
   const keys = generateKeyPairSync('ed25519');
   const publicKey = keys.publicKey
     .export({ format: 'pem', type: 'spki' })
@@ -49,10 +51,10 @@ export async function initApprover(
   const salt = randomBytes(16);
   const iv = randomBytes(12);
   const key = scryptSync(passphrase, salt, 32, {
-    N: 32768,
+    N: 131072,
     r: 8,
     p: 1,
-    maxmem: 64 * 1024 * 1024,
+    maxmem: 256 * 1024 * 1024,
   });
   try {
     const cipher = createCipheriv('aes-256-gcm', key, iv);
@@ -62,7 +64,7 @@ export async function initApprover(
       cipher.final(),
     ]);
     const file: KeyFile = {
-      version: 1,
+      version: 2,
       keyId,
       publicKey,
       salt: salt.toString('base64'),
@@ -95,7 +97,7 @@ async function signPayload<T extends ApprovalPayload | ResolutionPayload>(
     await readFile(join(directory, 'approver.json'), 'utf8'),
   ) as KeyFile;
   if (
-    file.version !== 1 ||
+    file.version !== 2 ||
     typeof file.keyId !== 'string' ||
     typeof file.publicKey !== 'string' ||
     typeof file.salt !== 'string' ||
@@ -116,10 +118,10 @@ async function signPayload<T extends ApprovalPayload | ResolutionPayload>(
   if (salt.length !== 16 || iv.length !== 12 || tag.length !== 16)
     throw new Error('Invalid encrypted key parameters');
   const key = scryptSync(passphrase, salt, 32, {
-    N: 32768,
+    N: 131072,
     r: 8,
     p: 1,
-    maxmem: 64 * 1024 * 1024,
+    maxmem: 256 * 1024 * 1024,
   });
   let decrypted: Buffer | undefined;
   try {
@@ -219,6 +221,13 @@ export async function promptApproval(
     throw new Error(
       'Approval requires a human-controlled interactive terminal outside CI',
     );
+  const approval = await signApproval(
+    directory,
+    await promptPassphrase(),
+    payload,
+  );
+  const { signature: _signature, ...signed } = approval;
+  stderr.write(`Signed approval payload:\n${canonicalJson(signed)}\n`);
   const rl = createInterface({ input: stdin, output: stderr });
   let confirmation: string;
   try {
@@ -230,7 +239,7 @@ export async function promptApproval(
   }
   if (confirmation !== payload.target)
     throw new Error('Target confirmation did not match');
-  return signApproval(directory, await promptPassphrase(), payload);
+  return approval;
 }
 
 /** The caller must display the intent and complete resolution evidence first. */

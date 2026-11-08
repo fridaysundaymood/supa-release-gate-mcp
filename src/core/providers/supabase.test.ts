@@ -84,7 +84,10 @@ describe('Supabase provider', () => {
       migrations: [{ name: '20240101_create.sql', sha256: expect.any(String) }],
     });
     await expect(
-      provider.execute({ ...plan, target: 'wrong' }),
+      provider.execute(
+        { ...plan, target: 'wrong' },
+        { state: null, evidence: null },
+      ),
     ).rejects.toThrow('target mismatch');
     await writeFile(
       join(workdir, 'supabase', '.temp', 'project-ref'),
@@ -139,6 +142,7 @@ describe('Supabase provider', () => {
   it('deploys to an explicit project and passes secrets only through a temporary file', async () => {
     const { target, calls } = await fixture();
     target.env = { TOKEN_REF: 'private value' };
+    target.secretEnvAllowlist = ['TOKEN_REF'];
     let contents = '';
     let file = '';
     target.runner = async (call) => {
@@ -158,6 +162,77 @@ describe('Supabase provider', () => {
     );
     await expect(readFile(file)).rejects.toThrow();
   });
+  it('denies unapproved and credential references before reading or invoking the CLI', async () => {
+    const { target, calls } = await fixture();
+    target.env = {
+      TOKEN_REF: 'permitted',
+      OTHER: 'unapproved',
+      SUPABASE_ACCESS_TOKEN: 'provider-token',
+      READ_URL: 'database-credential',
+    };
+    target.secretEnvAllowlist = [
+      'TOKEN_REF',
+      'SUPABASE_ACCESS_TOKEN',
+      'READ_URL',
+    ];
+    target.credentialEnvDenylist = ['READ_URL'];
+    for (const ref of ['OTHER', 'SUPABASE_ACCESS_TOKEN', 'READ_URL']) {
+      await expect(setSecretReferences(target, { TOKEN: ref })).rejects.toThrow(
+        'denied by host policy',
+      );
+    }
+    const provider = createSupabaseProvider(target, target.projectRef);
+    const plan = {
+      provider: 'supabase',
+      target: target.projectRef,
+      operation: 'secrets-set',
+      policy: { id: 'p', mode: 'write' as const },
+      references: { TOKEN: 'READ_URL' },
+    };
+    await expect(
+      provider.execute(plan, { state: null, evidence: null }),
+    ).rejects.toThrow('denied by host policy');
+    expect(calls).toEqual([]);
+    target.secretEnvAllowlist = undefined;
+    await expect(
+      setSecretReferences(target, { TOKEN: 'TOKEN_REF' }),
+    ).rejects.toThrow('denied by host policy');
+  });
+  it('executes only the captured secret values matching approved inputs', async () => {
+    const { target } = await fixture('[]');
+    target.snapshotKeyFile = join(target.workdir, 'snapshot.key');
+    const env = { TOKEN_REF: 'approved' };
+    target.env = env;
+    target.secretEnvAllowlist = ['TOKEN_REF'];
+    let written = '';
+    target.runner = async (call) => {
+      if (call.args.includes('--env-file')) {
+        env.TOKEN_REF = 'changed during execution';
+        written = await readFile(
+          call.args[call.args.indexOf('--env-file') + 1],
+          'utf8',
+        );
+      }
+      return { exitCode: 0, stdout: '[]', stderr: '' };
+    };
+    const provider = createSupabaseProvider(target, target.projectRef);
+    const plan = {
+      provider: 'supabase',
+      target: target.projectRef,
+      operation: 'secrets-set',
+      policy: { id: 'p', mode: 'write' as const },
+      references: { TOKEN: 'TOKEN_REF' },
+    };
+    const state = await provider.inspect(plan);
+    target.env.TOKEN_REF = 'changed';
+    await expect(
+      provider.execute(plan, { state, evidence: state }),
+    ).rejects.toThrow('changed since approval');
+    target.env.TOKEN_REF = 'approved';
+    await provider.execute(plan, { state, evidence: state });
+    expect(written).toContain('approved');
+    expect(written).not.toContain('changed during execution');
+  });
   it('discloses limited function and secret verification through the gate', async () => {
     const { target } = await fixture();
     target.snapshotKeyFile = join(
@@ -167,6 +242,7 @@ describe('Supabase provider', () => {
       'snapshot.key',
     );
     target.env = { TOKEN_REF: 'private value' };
+    target.secretEnvAllowlist = ['TOKEN_REF'];
     target.runner = async (call) => ({
       exitCode: 0,
       stderr: '',

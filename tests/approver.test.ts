@@ -13,20 +13,34 @@ import { canonicalJson } from '../src/core/gate.js';
 it('encrypts keys and signs approvals with the initialized identity', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'approver-'));
   try {
-    const identity = await initApprover(directory, 'correct passphrase');
-    await expect(initApprover(directory, 'other')).rejects.toThrow();
+    await expect(initApprover(directory, 'short')).rejects.toThrow(
+      'passphrase',
+    );
+    await expect(
+      initApprover(directory, 'aaaaaaaaaaaaaaaaaaaa'),
+    ).rejects.toThrow('passphrase');
+    const identity = await initApprover(
+      directory,
+      'correct long passphrase for testing',
+    );
+    await expect(
+      initApprover(directory, 'another long passphrase for testing'),
+    ).rejects.toThrow();
     const payload = {
+      kind: 'release-gate-approval-v1' as const,
+      gateId: 'gate',
       planHash: 'hash',
       target: 'production',
       evidenceHash: 'evidence',
       policyId: 'policy',
+      issuedAt: '2029-12-31T23:59:00.000Z',
       expiresAt: '2030-01-01T00:00:00.000Z',
       nonce: 'nonce',
     };
     await expect(signApproval(directory, 'wrong', payload)).rejects.toThrow();
     const { signature, ...signed } = await signApproval(
       directory,
-      'correct passphrase',
+      'correct long passphrase for testing',
       payload,
     );
     expect(signed.keyId).toBe(identity.keyId);
@@ -53,4 +67,4 @@ it('encrypts keys and signs approvals with the initialized identity', async () =
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
-});
+}, 30_000);

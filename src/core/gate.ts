@@ -13,14 +13,17 @@ export interface Plan {
   provider: string;
   target: string;
   operation: string;
-  policy: { id: string; mode: 'read' | 'write' | 'separate-approval' };
+  policy: { id: string; mode: 'read' | 'write' };
   [key: string]: Json | undefined;
 }
 export interface Approval {
+  kind: 'release-gate-approval-v1';
+  gateId: string;
   planHash: string;
   target: string;
   evidenceHash: string;
   policyId: string;
+  issuedAt: string;
   expiresAt: string;
   nonce: string;
   keyId: string;
@@ -43,7 +46,7 @@ export interface Resolution {
 export interface Provider {
   inspect(plan: Plan): Promise<Json>;
   dryRun(plan: Plan): Promise<Json>;
-  execute(plan: Plan): Promise<Json>;
+  execute(plan: Plan, approved: { state: Json; evidence: Json }): Promise<Json>;
   verify(plan: Plan): Promise<Json>;
   reconcile(
     plan: Plan,
@@ -97,6 +100,7 @@ export function hashJson(value: unknown): string {
   return createHash('sha256').update(canonicalJson(value)).digest('hex');
 }
 const zero = '0'.repeat(64);
+export const MAX_APPROVAL_LIFETIME_MS = 15 * 60_000;
 const targetKey = (provider: string, target: string) =>
   hashJson([provider, target]);
 const isRecord = (value: Json): value is { [key: string]: Json } =>
@@ -142,6 +146,28 @@ export class Gate {
     this.directory = options.directory;
     this.trustedPublicKeys = { ...options.trustedPublicKeys };
     this.authorizePlan = options.authorizePlan;
+  }
+  async gateId(): Promise<string> {
+    return this.withLock('identity', async () => {
+      const path = join(this.directory, 'gate-id');
+      try {
+        const id = (await readFile(path, 'utf8')).trim();
+        if (!/^[a-f0-9]{64}$/.test(id))
+          throw new Error('Invalid gate identity');
+        return id;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+        const id = randomBytes(32).toString('hex');
+        const file = await open(path, 'wx', 0o600);
+        try {
+          await file.writeFile(`${id}\n`);
+          await file.sync();
+        } finally {
+          await file.close();
+        }
+        return id;
+      }
+    });
   }
   private async init(): Promise<void> {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
@@ -227,7 +253,7 @@ export class Gate {
       !plan.target ||
       !plan.operation ||
       !plan.policy?.id ||
-      !['read', 'write', 'separate-approval'].includes(plan.policy.mode)
+      !['read', 'write'].includes(plan.policy.mode)
     )
       throw new Error('Invalid plan or policy');
     if (this.authorizePlan(plan) !== true)
@@ -299,15 +325,24 @@ export class Gate {
         if (!dry || !isRecord(dry.data)) throw new Error('Dry run required');
         const { signature, ...signed } = approval;
         const key = this.trustedPublicKeys[approval.keyId];
+        const now = Date.now();
+        const issuedAt = Date.parse(approval.issuedAt);
+        const expiresAt = Date.parse(approval.expiresAt);
         if (
           !key ||
+          approval.kind !== 'release-gate-approval-v1' ||
+          approval.gateId !== (await this.gateId()) ||
+          !Number.isFinite(issuedAt) ||
+          issuedAt > now ||
+          !Number.isFinite(expiresAt) ||
+          expiresAt <= issuedAt ||
+          expiresAt - issuedAt > MAX_APPROVAL_LIFETIME_MS ||
           approval.planHash !== planHash ||
           approval.target !== plan.target ||
           approval.policyId !== plan.policy.id ||
           approval.evidenceHash !== dry.data.evidenceHash ||
           !approval.nonce ||
-          !Number.isFinite(Date.parse(approval.expiresAt)) ||
-          Date.parse(approval.expiresAt) <= Date.now()
+          expiresAt <= now
         )
           throw new Error('Invalid or expired approval');
         if (
@@ -374,7 +409,7 @@ export class Gate {
             await file.close();
           }
         });
-        const outcome = await provider.execute(plan);
+        const outcome = await provider.execute(plan, { state, evidence });
         const verification = await provider.verify(plan);
         await this.append('outcome', {
           intentId,

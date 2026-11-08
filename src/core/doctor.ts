@@ -1,6 +1,6 @@
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import type { ReleaseConfig } from './config.js';
+import { checkReleaseHost, type ReleaseConfig } from './config.js';
 
 const exec = promisify(execFile);
 
@@ -15,6 +15,23 @@ export async function doctor(config: ReleaseConfig): Promise<DoctorResult> {
       detail: `Node ${process.version}; install Node 24 if incompatible`,
     },
   ];
+  try {
+    await checkReleaseHost(config);
+    checks.push({
+      name: 'host trust boundary',
+      ok: true,
+      detail: 'Host paths are protected and outside the project',
+    });
+  } catch (error) {
+    checks.push({
+      name: 'host trust boundary',
+      ok: false,
+      detail:
+        error instanceof Error
+          ? error.message
+          : 'Host path protection check failed',
+    });
+  }
   for (const [name, options] of Object.entries(config.providers ?? {})) {
     if (name === 'supabase' || name === 'cloudflare') {
       const command =

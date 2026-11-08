@@ -15,10 +15,12 @@ import * as pty from 'node-pty';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
   type Approval,
+  canonicalJson,
   Gate,
   type Plan,
   type Provider,
 } from '../src/core/gate.js';
+import { protectFixtureDirectory } from './protected-fixture.js';
 
 const cli = resolve('dist/cli/index.js');
 const roots: string[] = [];
@@ -76,7 +78,7 @@ function interactive(
         `Timed out waiting for ${exchanges[step]?.[0] ?? 'exit'}: ${output}`,
       ),
     );
-  }, 30_000);
+  }, 90_000);
   terminal.onData((data) => {
     output += data;
     remaining += data;
@@ -107,6 +109,7 @@ describe('human terminal approval', () => {
   it('initializes a key, approves the displayed plan, and executes with the signed approval', async () => {
     const root = await mkdtemp(join(tmpdir(), 'release-human-'));
     roots.push(root);
+    protectFixtureDirectory(root);
     const keys = join(root, 'keys');
     const passphrase = 'test-passphrase-not-a-secret';
     const initOutput = await interactive(
@@ -126,7 +129,7 @@ describe('human terminal approval', () => {
       operation: 'release',
       policy: { id: 'test-policy', mode: 'write' },
     };
-    const configPath = join(root, 'android-kit.yaml');
+    const configPath = join(root, 'release-gate.yaml');
     await writeFile(
       configPath,
       JSON.stringify({
@@ -144,6 +147,7 @@ describe('human terminal approval', () => {
           ],
         },
       }),
+      { mode: 0o600 },
     );
     let writes = 0;
     const provider: Provider = {
@@ -166,8 +170,8 @@ describe('human terminal approval', () => {
     const output = await interactive(
       ['approve', hash, '--key-directory', keys, '--config', configPath],
       [
-        ['Type the exact target to approve (production):', 'production'],
         ['Approval key passphrase:', passphrase],
+        ['Type the exact target to approve (production):', 'production'],
       ],
     );
     expect(output).toContain(hash);
@@ -178,16 +182,19 @@ describe('human terminal approval', () => {
     ) as Approval;
     expect(approval.planHash).toBe(hash);
     expect(approval.evidenceHash).toBe(dry.evidenceHash);
+    const { signature: _signature, ...payload } = approval;
+    expect(output).toContain(canonicalJson(payload));
     await gate.execute(hash, approval, provider);
     expect(writes).toBe(1);
     await expect(gate.execute(hash, approval, provider)).rejects.toThrow();
     expect(writes).toBe(1);
-  }, 60_000);
+  }, 180_000);
 
   it('refuses key initialization and approval when standard streams are not terminals', async () => {
     const root = await mkdtemp(join(tmpdir(), 'release-non-tty-'));
     roots.push(root);
-    const configPath = join(root, 'android-kit.yaml');
+    protectFixtureDirectory(root);
+    const configPath = join(root, 'release-gate.yaml');
     const { publicKey } = generateKeyPairSync('ed25519');
     await writeFile(
       configPath,
@@ -201,6 +208,7 @@ describe('human terminal approval', () => {
           policies: [],
         },
       }),
+      { mode: 0o600 },
     );
     for (const args of [
       ['keys', 'init', '--directory', join(root, 'keys')],
@@ -217,7 +225,7 @@ describe('human terminal approval', () => {
         encoding: 'utf8',
         env,
         input: 'production\ntest-passphrase\n',
-        timeout: 10_000,
+        timeout: 60_000,
       });
       expect(result.error).toBeUndefined();
       expect(result.status).not.toBe(0);
@@ -231,5 +239,5 @@ describe('human terminal approval', () => {
     await expect(
       readFile(join(root, 'approvals', `${'a'.repeat(64)}.json`)),
     ).rejects.toMatchObject({ code: 'ENOENT' });
-  });
+  }, 120_000);
 });

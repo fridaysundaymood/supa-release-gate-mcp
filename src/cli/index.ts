@@ -4,8 +4,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { stdin, stdout } from 'node:process';
-import { pathToFileURL } from 'node:url';
-import { createResult, exitCodeFor, newRunId } from '@android-kit/schema';
+import { createResult, exitCodeFor, newRunId } from '@budaknyenyel/kit-schema';
 import {
   initApprover,
   promptPassphrase,
@@ -14,9 +13,31 @@ import {
 import { loadReleaseConfig } from '../core/config.js';
 import type { Json, Plan, Resolution } from '../core/gate.js';
 import { type Operation, ReleaseInterfaces } from '../core/interfaces.js';
+import { isEntrypoint } from '../core/is-entrypoint.js';
 import { resolveProvider } from '../core/providers.js';
 
 export async function runCli(args: string[]): Promise<number> {
+  if (args.length === 1 && (args[0] === '--help' || args[0] === '-h')) {
+    stdout.write(`Usage: release [--config PATH] [--json] COMMAND
+
+Commands:
+  keys init [--directory PATH]     Create a human approver key
+  plan FILE                        Record a release plan
+  dry-run HASH                     Inspect and dry-run a plan
+  approve HASH [--key-directory PATH] [--expires ISO]
+                                   Review and sign an approval
+  approval-status HASH             Inspect approval status
+  execute HASH                     Execute an approved plan
+  verify HASH                      Verify a release
+  recover HASH                     Reconcile an interrupted release
+  resolve INTENT --status succeeded|failed --evidence FILE
+                                   Sign a human resolution
+  ledger list|render               Inspect the release ledger
+  status                           Show pending releases
+  doctor                           Check configuration
+`);
+    return 0;
+  }
   const values = [...args];
   const defaultKeyDir = join(
     process.env.APPDATA ??
@@ -34,7 +55,7 @@ export async function runCli(args: string[]): Promise<number> {
     values.splice(i, 2);
     return value;
   };
-  const configPath = flag('--config') ?? 'android-kit.yaml';
+  const configPath = flag('--config');
   const json = values.includes('--json');
   if (json) values.splice(values.indexOf('--json'), 1);
   const command = values.shift();
@@ -82,17 +103,6 @@ export async function runCli(args: string[]): Promise<number> {
       throw new Error(
         'Usage: release approve HASH --key-directory PATH --expires ISO',
       );
-    const records = await api.gate.ledger();
-    const card = records.filter(
-      (e) =>
-        (e.type === 'plan' &&
-          (e.data as Record<string, unknown>).hash === hash) ||
-        (e.type === 'dry-run' &&
-          (e.data as Record<string, unknown>).planHash === hash),
-    );
-    (json ? process.stderr : stdout).write(
-      `${JSON.stringify(card, null, 2)}\n`,
-    );
     const approval = await api.approve(hash, key, expires);
     stdout.write(
       `${JSON.stringify(json ? createResult({ tool: 'release', operation: 'approve', run_id: newRunId(), status: 'pass', summary: 'Approval signed', evidence: [{ planHash: approval.planHash, expiresAt: approval.expiresAt }], artifacts: [], startedAt: new Date() }) : { planHash: approval.planHash, expiresAt: approval.expiresAt })}\n`,
@@ -203,7 +213,7 @@ export async function runCli(args: string[]): Promise<number> {
   return exitCodeFor(result.status);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href)
+if (isEntrypoint(import.meta.url))
   runCli(process.argv.slice(2))
     .then((code) => {
       process.exitCode = code;

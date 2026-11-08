@@ -1,11 +1,18 @@
 import { spawn } from 'node:child_process';
 import { createHash, createHmac, randomBytes } from 'node:crypto';
 import { once } from 'node:events';
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
+import {
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { stripVTControlCharacters } from 'node:util';
-import type { Json, Plan, Provider } from '../gate.js';
+import { canonicalJson, type Json, type Plan, type Provider } from '../gate.js';
 
 export interface ProcessRequest {
   command: string;
@@ -28,6 +35,8 @@ export interface SupabaseTarget {
   env?: NodeJS.ProcessEnv;
   runner?: ProcessRunner;
   snapshotKeyFile?: string;
+  secretEnvAllowlist?: readonly string[];
+  credentialEnvDenylist?: readonly string[];
 }
 export interface MigrationDryRun {
   pending: string[];
@@ -215,6 +224,26 @@ export async function deployFunction(
     '--yes',
   ]);
 }
+function validateSecretReference(
+  target: SupabaseTarget,
+  reference: string,
+): void {
+  if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(reference))
+    throw new Error('Invalid secret environment reference');
+  const normalized = reference.toUpperCase();
+  if (
+    normalized.startsWith('SUPABASE_') ||
+    ['PGPASSWORD', 'DATABASE_URL', 'GOOGLE_APPLICATION_CREDENTIALS'].includes(
+      normalized,
+    ) ||
+    target.credentialEnvDenylist?.some(
+      (name) => name.toUpperCase() === normalized,
+    ) ||
+    !target.secretEnvAllowlist?.includes(reference)
+  )
+    throw new Error('Secret environment reference denied by host policy');
+}
+
 export async function setSecretReferences(
   target: SupabaseTarget,
   references: Record<string, string>,
@@ -226,8 +255,7 @@ export async function setSecretReferences(
   const lines = entries.map(([name, reference]) => {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || name.startsWith('SUPABASE_'))
       throw new Error('Invalid secret name');
-    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(reference))
-      throw new Error('Invalid secret environment reference');
+    validateSecretReference(target, reference);
     const value = env[reference];
     if (value === undefined || /[\r\n\0]/.test(value))
       throw new Error('Missing or invalid referenced secret');
@@ -299,6 +327,7 @@ export function createSupabaseProvider(
         !/^[A-Za-z_][A-Za-z0-9_]*$/.test(ref)
       )
         throw new Error('Invalid secret reference');
+      validateSecretReference(target, ref);
       if ((target.env ?? process.env)[ref] === undefined)
         throw new Error('Missing referenced secret');
       result[name] = ref;
@@ -333,7 +362,12 @@ export function createSupabaseProvider(
       throw new Error('Unrecognized provider list output');
     return data as Record<string, unknown>[];
   }
-  async function tree(dir: string, key: Buffer, prefix = ''): Promise<Json[]> {
+  async function tree(
+    dir: string,
+    key: Buffer | null,
+    prefix = '',
+    copyTo?: string,
+  ): Promise<Json[]> {
     const result: Json[] = [];
     for (const entry of (await readdir(dir, { withFileTypes: true })).sort(
       (a, b) => a.name.localeCompare(b.name),
@@ -343,16 +377,26 @@ export function createSupabaseProvider(
       const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
       if (entry.isSymbolicLink())
         throw new Error('Cannot snapshot symbolic links in function workspace');
-      if (entry.isDirectory())
-        result.push(...(await tree(join(dir, entry.name), key, relative)));
-      else if (entry.isFile())
+      if (entry.isDirectory()) {
+        if (copyTo)
+          await mkdir(join(copyTo, relative), { recursive: true, mode: 0o700 });
+        result.push(
+          ...(await tree(join(dir, entry.name), key, relative, copyTo)),
+        );
+      } else if (entry.isFile()) {
+        const bytes = await readFile(join(dir, entry.name));
+        if (copyTo)
+          await writeFile(join(copyTo, relative), bytes, {
+            mode: 0o600,
+            flag: 'wx',
+          });
         result.push({
           path: relative,
-          digest: createHmac('sha256', key)
-            .update(await readFile(join(dir, entry.name)))
+          digest: (key ? createHmac('sha256', key) : createHash('sha256'))
+            .update(bytes)
             .digest('hex'),
         });
-      else
+      } else
         throw new Error('Cannot snapshot special files in function workspace');
     }
     return result;
@@ -466,25 +510,118 @@ export function createSupabaseProvider(
           .digest('hex'),
       })),
     );
-    return { migrations, upToDate: result.upToDate };
+    return {
+      migrations,
+      upToDate: result.upToDate,
+      workspace: await tree(target.workdir, null),
+    };
   }
   return {
     inspect: snapshot,
     dryRun: snapshot,
-    async execute(plan): Promise<Json> {
+    async execute(plan, approved): Promise<Json> {
       validate(plan);
       if (plan.operation === 'sql-check')
         return { passed: await runReadOnlySqlCheck(target, check(plan)) };
-      if (plan.operation === 'function-deploy') {
-        await deployFunction(target, functionName(plan));
-        return { executed: true };
+      if (
+        plan.operation === 'function-deploy' ||
+        plan.operation === 'db-push'
+      ) {
+        const state = approved?.state;
+        if (
+          !state ||
+          typeof state !== 'object' ||
+          Array.isArray(state) ||
+          !Array.isArray(state.workspace)
+        )
+          throw new Error('Approved workspace evidence required');
+        const dir = await mkdtemp(join(tmpdir(), 'release-workspace-'));
+        try {
+          const key =
+            plan.operation === 'function-deploy' ? await snapshotKey() : null;
+          const captured = await tree(target.workdir, key, '', dir);
+          const evidence = approved.evidence;
+          if (
+            !evidence ||
+            typeof evidence !== 'object' ||
+            Array.isArray(evidence) ||
+            canonicalJson(captured) !== canonicalJson(state.workspace) ||
+            canonicalJson(captured) !== canonicalJson(evidence.workspace)
+          )
+            throw new Error('Workspace changed since approval');
+          if (plan.operation === 'db-push') {
+            if (
+              !Array.isArray(state.migrations) ||
+              !Array.isArray(evidence.migrations) ||
+              canonicalJson(state.migrations) !==
+                canonicalJson(evidence.migrations)
+            )
+              throw new Error('Migration evidence changed');
+            for (const migration of state.migrations) {
+              if (
+                !migration ||
+                typeof migration !== 'object' ||
+                Array.isArray(migration) ||
+                !captured.some(
+                  (file) =>
+                    file &&
+                    typeof file === 'object' &&
+                    !Array.isArray(file) &&
+                    file.path === `supabase/migrations/${migration.name}` &&
+                    file.digest === migration.sha256,
+                )
+              )
+                throw new Error('Migration content changed since approval');
+            }
+          }
+          const staged = {
+            ...target,
+            workdir: dir,
+            env: { ...target.env, SUPABASE_WORKDIR: dir },
+          };
+          if (plan.operation === 'function-deploy')
+            await deployFunction(staged, functionName(plan));
+          else await executeDatabasePush(staged);
+          return { executed: true };
+        } finally {
+          await rm(dir, { recursive: true, force: true });
+        }
       }
       if (plan.operation === 'secrets-set') {
-        await setSecretReferences(target, references(plan));
+        const refs = references(plan);
+        const env = { ...(target.env ?? process.env) };
+        const key = await snapshotKey();
+        const inputs = Object.entries(refs)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([name, ref]) => {
+            const value = env[ref];
+            if (value === undefined)
+              throw new Error('Missing referenced secret');
+            return {
+              name,
+              ref,
+              digest: createHmac('sha256', key).update(value).digest('hex'),
+            };
+          });
+        const state = approved?.state;
+        const evidence = approved?.evidence;
+        if (
+          !state ||
+          typeof state !== 'object' ||
+          Array.isArray(state) ||
+          !evidence ||
+          typeof evidence !== 'object' ||
+          Array.isArray(evidence) ||
+          !Array.isArray(state.inputs) ||
+          !Array.isArray(evidence.inputs) ||
+          canonicalJson(inputs) !== canonicalJson(state.inputs) ||
+          canonicalJson(inputs) !== canonicalJson(evidence.inputs)
+        )
+          throw new Error('Secret inputs changed since approval');
+        await setSecretReferences({ ...target, env }, refs);
         return { executed: true };
       }
-      await executeDatabasePush(target);
-      return { executed: true };
+      throw new Error('Unsupported Supabase operation');
     },
     async verify(plan): Promise<Json> {
       validate(plan);

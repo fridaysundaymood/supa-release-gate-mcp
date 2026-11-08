@@ -60,6 +60,9 @@ describe('release gate', () => {
     const planHash = await gate.plan(plan);
     const { evidenceHash } = await gate.dryRun(planHash, provider);
     const unsigned = {
+      kind: 'release-gate-approval-v1' as const,
+      gateId: await gate.gateId(),
+      issuedAt: new Date().toISOString(),
       planHash,
       target: plan.target,
       evidenceHash,
@@ -76,6 +79,50 @@ describe('release gate', () => {
         keys.privateKey,
       ).toString('base64'),
     };
+    const signBody = (body: typeof unsigned) => ({
+      ...body,
+      signature: sign(
+        null,
+        Buffer.from(canonicalJson(body)),
+        keys.privateKey,
+      ).toString('base64'),
+    });
+    for (const altered of [
+      { ...unsigned, kind: 'other' as typeof unsigned.kind },
+      { ...unsigned, gateId: 'another-gate' },
+      { ...unsigned, issuedAt: new Date(Date.now() + 60_000).toISOString() },
+      {
+        ...unsigned,
+        issuedAt: new Date(Date.now() - 16 * 60_000).toISOString(),
+      },
+    ]) {
+      await expect(
+        gate.execute(planHash, signBody(altered), provider),
+      ).rejects.toThrow('Invalid or expired approval');
+    }
+    const otherDirectory = await mkdtemp(join(tmpdir(), 'release-gate-other-'));
+    directories.push(otherDirectory);
+    const otherGate = new Gate({
+      directory: otherDirectory,
+      trustedPublicKeys: {
+        human: keys.publicKey
+          .export({ type: 'spki', format: 'pem' })
+          .toString(),
+      },
+      authorizePlan: () => true,
+    });
+    expect(await otherGate.gateId()).not.toBe(unsigned.gateId);
+    await otherGate.plan(plan);
+    await otherGate.dryRun(planHash, provider);
+    await expect(
+      otherGate.execute(planHash, approval, provider),
+    ).rejects.toThrow('Invalid or expired approval');
+    await expect(
+      otherGate.plan({
+        ...plan,
+        policy: { id: 'production', mode: 'separate-approval' },
+      } as unknown as Plan),
+    ).rejects.toThrow('Invalid plan');
     state = 'changed';
     await expect(gate.execute(planHash, approval, provider)).rejects.toThrow(
       'changed',
@@ -99,7 +146,7 @@ describe('release gate', () => {
     const ledger = join(directory, 'ledger.jsonl');
     await writeFile(ledger, (await readFile(ledger, 'utf8')).slice(0, -1));
     await expect(gate.ledger()).rejects.toThrow('Truncated');
-  });
+  }, 30_000);
   it('requires a signed, single-use human resolution for uncertain writes', async () => {
     const directory = await mkdtemp(join(tmpdir(), 'release-gate-'));
     directories.push(directory);
@@ -131,6 +178,9 @@ describe('release gate', () => {
     const planHash = await gate.plan(plan);
     const { evidenceHash } = await gate.dryRun(planHash, provider);
     const unsigned = {
+      kind: 'release-gate-approval-v1' as const,
+      gateId: await gate.gateId(),
+      issuedAt: new Date().toISOString(),
       planHash,
       target: plan.target,
       evidenceHash,

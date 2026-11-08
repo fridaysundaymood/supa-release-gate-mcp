@@ -1,7 +1,16 @@
 import { execFile } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { lstat, readFile } from 'node:fs/promises';
-import { resolve } from 'node:path';
+import {
+  lstat,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { canonicalJson, type Json, type Plan, type Provider } from '../gate.js';
 import {
@@ -35,21 +44,57 @@ const text = (value: unknown, name: string): string => {
 };
 const args = (plan: Plan) => object(plan.args);
 
-async function directoryState(directory: string): Promise<Json> {
+const gitEnv = Object.fromEntries(
+  Object.entries(process.env).filter(([name]) => !/^GIT_/i.test(name)),
+);
+Object.assign(gitEnv, {
+  GIT_CONFIG_NOSYSTEM: '1',
+  GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+  GIT_TERMINAL_PROMPT: '0',
+});
+const inside = (root: string, path: string) => {
+  const rel = relative(root, path);
+  return (
+    rel === '' ||
+    (!isAbsolute(rel) &&
+      rel !== '..' &&
+      !rel.startsWith(`..${process.platform === 'win32' ? '\\' : '/'}`))
+  );
+};
+async function directoryState(
+  directory: string,
+  copyTo?: string,
+): Promise<Json> {
   const cwd = resolve(directory);
   const status = await exec(
     'git',
-    ['status', '--porcelain', '--ignored', '--untracked-files=all', '--', '.'],
-    { cwd },
+    [
+      '-c',
+      'core.fsmonitor=false',
+      '-c',
+      'core.hooksPath=',
+      'status',
+      '--porcelain',
+      '--ignored',
+      '--untracked-files=all',
+      '--',
+      '.',
+    ],
+    { cwd, env: gitEnv },
   );
   if (status.stdout.trim())
     throw new Error(
       'Pages directory contains uncommitted, untracked, or ignored files',
     );
-  const files = await exec('git', ['ls-files', '-z', '--', '.'], {
-    cwd,
-    encoding: 'buffer',
-  });
+  const files = await exec(
+    'git',
+    ['-c', 'core.fsmonitor=false', 'ls-files', '-z', '--', '.'],
+    {
+      cwd,
+      encoding: 'buffer',
+      env: gitEnv,
+    },
+  );
   const names = files.stdout
     .toString('utf8')
     .split('\0')
@@ -57,16 +102,28 @@ async function directoryState(directory: string): Promise<Json> {
     .sort();
   if (!names.length) throw new Error('Pages directory has no tracked files');
   const commit = (
-    await exec('git', ['rev-parse', 'HEAD'], { cwd })
+    await exec('git', ['rev-parse', '--verify', 'HEAD^{commit}'], {
+      cwd,
+      env: gitEnv,
+    })
   ).stdout.trim();
-  const hashes: Record<string, string> = {};
+  const hashes: Record<string, string> = Object.create(null);
   for (const name of names) {
     const path = resolve(cwd, name);
-    if (!(await lstat(path)).isFile())
+    if (
+      !inside(cwd, path) ||
+      !(await lstat(path)).isFile() ||
+      !inside(cwd, await realpath(path))
+    )
       throw new Error(`Pages entry is not a regular file: ${name}`);
-    hashes[name] = createHash('sha256')
-      .update(await readFile(path))
-      .digest('hex');
+    const bytes = await readFile(path);
+    hashes[name] = createHash('sha256').update(bytes).digest('hex');
+    if (copyTo) {
+      const destination = resolve(copyTo, name);
+      if (!inside(copyTo, destination)) throw new Error('Invalid Pages path');
+      await mkdir(dirname(destination), { recursive: true, mode: 0o700 });
+      await writeFile(destination, bytes, { mode: 0o600, flag: 'wx' });
+    }
   }
   return { commit, files: hashes };
 }
@@ -76,6 +133,8 @@ export function createCloudflareGateProvider(
     accountId: string;
     zoneId?: string;
     wrangler?: string;
+    pagesRoot?: string;
+    projectRoot?: string;
   },
 ): Provider {
   const deployments = async (
@@ -132,12 +191,22 @@ export function createCloudflareGateProvider(
       input.branch === undefined ? undefined : text(input.branch, 'branch');
     return { directory, url, expectedContent, branch };
   };
+  const pageState = async (plan: Plan, copyTo?: string): Promise<Json> => {
+    if (!settings.pagesRoot || !settings.projectRoot)
+      throw new Error('Trusted Pages root and project root are required');
+    const project = await realpath(settings.projectRoot);
+    const root = await realpath(resolve(project, settings.pagesRoot));
+    const directory = await realpath(resolve(project, pages(plan).directory));
+    if (!inside(project, root) || !inside(root, directory))
+      throw new Error('Pages directory is outside the trusted root');
+    return directoryState(directory, copyTo);
+  };
   const inspect = async (plan: Plan): Promise<Json> => {
     if (plan.operation === 'dns-change')
       return asJson((await dns(plan)).records);
     if (plan.operation === 'pages-deploy')
       return asJson({
-        directory: await directoryState(pages(plan).directory),
+        directory: await pageState(plan),
         deployments: await deployments(plan.target),
       });
     throw new Error(`Unsupported Cloudflare operation: ${plan.operation}`);
@@ -145,7 +214,7 @@ export function createCloudflareGateProvider(
   const verify = async (plan: Plan): Promise<Json> => {
     if (plan.operation === 'pages-deploy') {
       const input = pages(plan);
-      const state = object(await directoryState(input.directory));
+      const state = object(await pageState(plan));
       const deployment = (await deployments(plan.target)).find(
         (item) =>
           item.deployment_trigger?.metadata?.commit_hash === state.commit &&
@@ -206,13 +275,13 @@ export function createCloudflareGateProvider(
       if (plan.operation === 'pages-deploy')
         return asJson({
           directory: pages(plan).directory,
-          state: await directoryState(pages(plan).directory),
+          state: await pageState(plan),
           limitation:
             'Wrangler has no deployment dry run; execution uploads and publishes. External changes may race execution.',
         });
       throw new Error(`Unsupported Cloudflare operation: ${plan.operation}`);
     },
-    execute: async (plan) => {
+    execute: async (plan, approved) => {
       if (plan.operation === 'dns-change') {
         if (!settings.zoneId) throw new Error('DNS zone is not configured');
         return asJson(
@@ -225,16 +294,31 @@ export function createCloudflareGateProvider(
       }
       if (plan.operation === 'pages-deploy') {
         const input = pages(plan);
-        return asJson(
-          await deployPages({
-            directory: input.directory,
-            project: plan.target,
-            accountId: settings.accountId,
-            token: settings.token,
-            branch: input.branch,
-            wrangler: settings.wrangler,
-          }),
-        );
+        const dir = await mkdtemp(join(tmpdir(), 'release-pages-'));
+        try {
+          const state = await pageState(plan, dir);
+          const evidence = object(approved.evidence);
+          if (
+            canonicalJson(state) !== canonicalJson(evidence.state) ||
+            canonicalJson(state) !==
+              canonicalJson(object(approved.state).directory)
+          )
+            throw new Error('Pages directory changed since approval');
+          const commit = text(object(state).commit, 'commit');
+          return asJson(
+            await deployPages({
+              directory: dir,
+              project: plan.target,
+              accountId: settings.accountId,
+              token: settings.token,
+              branch: input.branch,
+              wrangler: settings.wrangler,
+              commit,
+            }),
+          );
+        } finally {
+          await rm(dir, { recursive: true, force: true });
+        }
       }
       throw new Error(`Unsupported Cloudflare operation: ${plan.operation}`);
     },

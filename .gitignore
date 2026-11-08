@@ -13,6 +13,10 @@ coverage/
 .release-approvals/
 test/fixtures/local/supabase/migrations/
 test/fixtures/local/supabase/.temp/
+test/fixtures/local/supabase/.branches/
+.npmrc
+*.tgz
+.publish-*/
 
 # Local logs and OS/editor files
 *.log

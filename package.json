@@ -1,24 +1,48 @@
 {
-  "name": "@android-kit/supa-release-gate-mcp",
-  "version": "1.0.0",
+  "name": "@budaknyenyel/supa-release-gate-mcp",
+  "version": "0.1.0",
   "type": "module",
   "engines": {
-    "node": ">=24 <25"
+    "node": ">=24"
   },
+  "description": "Human-approved release gate for Supabase and cloud providers",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fridaysundaymood/supa-release-gate-mcp.git"
+  },
+  "main": "./dist/core/index.js",
+  "types": "./dist/core/index.d.ts",
   "exports": {
-    ".": "./dist/core/index.js"
+    ".": {
+      "types": "./dist/core/index.d.ts",
+      "import": "./dist/core/index.js"
+    }
   },
   "bin": {
     "release": "./dist/cli/index.js",
     "release-mcp": "./dist/mcp/index.js"
   },
+  "files": [
+    "dist",
+    "skills",
+    "AGENTS.md",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "lint": "biome check .",
     "build": "tsc -p tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepare-publish": "node scripts/prepare-publish.mjs",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@android-kit/schema": "file:../android-kit/packages/kit-schema",
+    "@budaknyenyel/kit-schema": "file:../android-kit/packages/kit-schema",
     "@modelcontextprotocol/sdk": "^1.27.1",
     "zod": "^3.25.76"
   },

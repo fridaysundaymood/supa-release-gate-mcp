@@ -120,16 +120,16 @@ async function stage(
   config: PlayConfig,
   id: string,
   operation: PlayOperation,
+  bytes: Buffer | null,
 ): Promise<PlayTrack> {
-  if (operation.bundlePath) {
-    const bytes = await readFile(operation.bundlePath);
+  if (bytes) {
     const uploaded = await request<{ versionCode?: number | string }>(
       config,
       `${publisher}/upload/androidpublisher/v3/applications/${enc(config.packageName)}/edits/${enc(id)}/bundles?uploadType=media`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/octet-stream' },
-        body: bytes,
+        body: bytes as unknown as BodyInit,
       },
     );
     if (
@@ -150,13 +150,27 @@ async function runEdit(
   config: PlayConfig,
   operation: PlayOperation,
   commit: boolean,
-): Promise<{ editId: string; track: PlayTrack; committed: boolean }> {
+  expectedDigest?: string | null,
+): Promise<{
+  editId: string;
+  track: PlayTrack;
+  committed: boolean;
+  bundleSha256: string | null;
+}> {
   validatePlayOperation(operation);
+  const bytes = operation.bundlePath
+    ? await readFile(operation.bundlePath)
+    : null;
+  const bundleSha256 = bytes
+    ? createHash('sha256').update(bytes).digest('hex')
+    : null;
+  if (expectedDigest !== undefined && bundleSha256 !== expectedDigest)
+    throw new Error('Play bundle changed since approval');
   const editId = await createEdit(config);
   let committed = false;
   let commitAttempted = false;
   try {
-    const track = await stage(config, editId, operation);
+    const track = await stage(config, editId, operation, bytes);
     await request(config, `${base(config)}/edits/${enc(editId)}:validate`, {
       method: 'POST',
     });
@@ -167,15 +181,19 @@ async function runEdit(
       });
       committed = true;
     }
-    return { editId, track, committed };
+    return { editId, track, committed, bundleSha256 };
   } finally {
     // A failed commit may have succeeded remotely; never mutate its edit during reconciliation.
     if (!commitAttempted) await deleteEdit(config, editId);
   }
 }
 export async function playDryRun(config: PlayConfig, operation: PlayOperation) {
-  const { track, committed } = await runEdit(config, operation, false);
-  return { track, committed, bundleSha256: await playBundleDigest(operation) };
+  const { track, committed, bundleSha256 } = await runEdit(
+    config,
+    operation,
+    false,
+  );
+  return { track, committed, bundleSha256 };
 }
 export async function playBundleDigest(
   operation: PlayOperation,
@@ -189,8 +207,9 @@ export async function playBundleDigest(
 export async function playExecute(
   config: PlayConfig,
   operation: PlayOperation,
+  expectedDigest?: string | null,
 ) {
-  return runEdit(config, operation, true);
+  return runEdit(config, operation, true, expectedDigest);
 }
 export async function readTracks(config: PlayConfig): Promise<PlayTrack[]> {
   const editId = await createEdit(config);

@@ -20,9 +20,9 @@ describe.skipIf(!enabled)('local Supabase migration gate', () => {
     const directory = await mkdtemp(
       join(tmpdir(), 'release-gate-integration-'),
     );
-    await rm(migrations, { recursive: true, force: true });
-    await cp(migrationSource, migrations, { recursive: true });
     try {
+      await rm(migrations, { recursive: true, force: true });
+      await cp(migrationSource, migrations, { recursive: true });
       const { privateKey, publicKey } = generateKeyPairSync('ed25519');
       const provider = createSupabaseProvider(
         { projectRef: 'ak-release', workdir, local: true, cli },
@@ -48,8 +48,12 @@ describe.skipIf(!enabled)('local Supabase migration gate', () => {
       };
       const hash = await gate.plan(plan);
       const dry = await gate.dryRun(hash, provider);
+      const gateId = await gate.gateId();
       const approval = (): Approval => {
         const body = {
+          kind: 'release-gate-approval-v1' as const,
+          gateId,
+          issuedAt: new Date().toISOString(),
           planHash: hash,
           target: plan.target,
           evidenceHash: dry.evidenceHash,

@@ -14,6 +14,12 @@ function run(command, args, env = process.env) {
   return result.status ?? 1;
 }
 let status = 1;
+let started = false;
+if (run(cli, ['status', '--workdir', workdir]) === 0) {
+  throw new Error(
+    'Local Supabase stack is already running; refusing to stop it',
+  );
+}
 try {
   if (
     run(cli, [
@@ -24,6 +30,7 @@ try {
       'studio,imgproxy,edge-runtime,logflare,vector,supavisor,realtime,storage-api,gotrue,kong,mailpit,postgrest,postgres-meta',
     ]) === 0
   ) {
+    started = true;
     status = run(
       process.execPath,
       [
@@ -35,6 +42,7 @@ try {
     );
   }
 } finally {
-  if (run(cli, ['stop', '--workdir', workdir, '--no-backup']) !== 0) status = 1;
+  if (started && run(cli, ['stop', '--workdir', workdir, '--no-backup']) !== 0)
+    status = 1;
 }
 process.exitCode = status;

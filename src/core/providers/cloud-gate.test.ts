@@ -72,7 +72,7 @@ describe('cloud gate adapters', () => {
       changed: true,
       removed: [{ role: 'roles/viewer' }],
     });
-    await provider.execute(change);
+    await provider.execute(change, { state: null, evidence: null });
     expect(methods).toEqual(['POST', 'POST']);
   });
 });

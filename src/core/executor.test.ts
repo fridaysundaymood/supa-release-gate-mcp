@@ -22,6 +22,9 @@ describe('external executor', () => {
         policy: { id: 'p', mode: 'write' },
       };
       const approval: Approval = {
+        kind: 'release-gate-approval-v1',
+        gateId: 'gate',
+        issuedAt: '2029-12-31T23:59:00Z',
         planHash: 'hash',
         target: 'target',
         evidenceHash: 'evidence',

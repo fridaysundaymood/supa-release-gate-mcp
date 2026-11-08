@@ -1,4 +1,4 @@
-import { createResult, newRunId, type Result } from '@android-kit/schema';
+import { createResult, newRunId, type Result } from '@budaknyenyel/kit-schema';
 import { loadReleaseConfig, releaseConfigSchema } from './config.js';
 import { type Operation, ReleaseInterfaces } from './interfaces.js';
 import { resolveProvider } from './providers.js';
@@ -29,9 +29,7 @@ export function toolDefinitions(options: ToolOptions = {}) {
   let apiPromise: Promise<ReleaseInterfaces> | undefined;
   const getApi = () => {
     if (options.api) return Promise.resolve(options.api);
-    apiPromise ??= loadReleaseConfig(
-      options.configPath ?? 'android-kit.yaml',
-    ).then(
+    apiPromise ??= loadReleaseConfig(options.configPath).then(
       (config) =>
         new ReleaseInterfaces(config, (plan) => resolveProvider(config, plan)),
     );
