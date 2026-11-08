@@ -1,9 +1,11 @@
+import { execFileSync } from 'node:child_process';
 import { chmod, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { checkReleaseHost, loadReleaseConfig } from '../src/core/config.js';
 import { doctor } from '../src/core/doctor.js';
+import { protectFixtureDirectory } from './protected-fixture.js';
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -35,6 +37,29 @@ it('rejects a host configuration located in the project before loading it', asyn
     loadReleaseConfig(join(process.cwd(), 'untrusted-release-config.json')),
   ).rejects.toThrow(/outside the project/);
 });
+
+it.skipIf(process.platform !== 'win32')(
+  'checks Windows ACLs independently of the inherited PowerShell module path',
+  async () => {
+    const { root, path } = await config();
+    protectFixtureDirectory(root);
+    const previous = process.env.PSModulePath;
+    process.env.PSModulePath = root;
+    try {
+      await expect(loadReleaseConfig(path)).resolves.toBeDefined();
+      execFileSync(
+        join(process.env.SystemRoot ?? '', 'System32', 'icacls.exe'),
+        [path, '/grant', '*S-1-1-0:W'],
+      );
+      await expect(loadReleaseConfig(path)).rejects.toThrow(
+        /Untrusted write access/,
+      );
+    } finally {
+      if (previous === undefined) delete process.env.PSModulePath;
+      else process.env.PSModulePath = previous;
+    }
+  },
+);
 
 describe.skipIf(process.platform === 'win32')(
   'protected release host configuration',

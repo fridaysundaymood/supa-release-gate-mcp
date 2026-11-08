@@ -13,6 +13,15 @@ function run(command, args, env = process.env) {
   if (result.error) throw result.error;
   return result.status ?? 1;
 }
+if (
+  run(process.execPath, [
+    resolve(cwd, 'node_modules/typescript/bin/tsc'),
+    '-p',
+    'tsconfig.json',
+  ]) !== 0
+) {
+  throw new Error('Failed to build the release CLI');
+}
 let status = 1;
 let started = false;
 if (run(cli, ['status', '--workdir', workdir]) === 0) {

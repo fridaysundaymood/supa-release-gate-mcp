@@ -186,6 +186,13 @@ async function protectPaths(paths: string[]): Promise<void> {
       {
         env: {
           ...process.env,
+          PSModulePath: resolve(
+            process.env.SystemRoot,
+            'System32',
+            'WindowsPowerShell',
+            'v1.0',
+            'Modules',
+          ),
           RELEASE_GATE_ACL_PATHS: JSON.stringify(
             Array.from(entries, ([path, target]) => ({ path, target })),
           ),
