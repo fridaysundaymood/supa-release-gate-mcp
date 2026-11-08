@@ -29,7 +29,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: npm ci && npm run build
+      - run: npm ci --workspace=@android-kit/schema && npm run build --workspace=@android-kit/schema
         working-directory: android-kit
       - run: npm ci
         working-directory: supa-release-gate-mcp
@@ -55,7 +55,7 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - run: npm ci && npm run build
+      - run: npm ci --workspace=@android-kit/schema && npm run build --workspace=@android-kit/schema
         working-directory: android-kit
       - run: npm ci
         working-directory: supa-release-gate-mcp
