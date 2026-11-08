@@ -1,10 +1,11 @@
 import { spawnSync } from 'node:child_process';
 import { generateKeyPairSync } from 'node:crypto';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { createRequire } from 'node:module';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import * as pty from 'node-pty';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import {
   type Approval,
   Gate,
@@ -18,6 +19,22 @@ const env = { ...process.env, CI: '', MCP_SERVER: '' } as Record<
   string,
   string
 >;
+
+beforeAll(async () => {
+  if (process.platform !== 'darwin') return;
+  const require = createRequire(import.meta.url);
+  const { dir } = require('node-pty/lib/utils.js').loadNativeModule('pty') as {
+    dir: string;
+  };
+  const helper = resolve(
+    require.resolve('node-pty/lib/utils.js'),
+    '..',
+    dir,
+    'spawn-helper',
+  );
+  const mode = (await stat(helper)).mode;
+  await chmod(helper, mode | 0o111);
+});
 
 afterEach(async () => {
   await Promise.all(
