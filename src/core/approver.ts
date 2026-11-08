@@ -181,8 +181,8 @@ export function promptPassphrase(): Promise<string> {
     );
   const { promise, resolve, reject } = Promise.withResolvers<string>();
   let value = '';
-  stderr.write('Approval key passphrase: ');
   stdin.setRawMode(true);
+  stderr.write('Approval key passphrase: ');
   stdin.resume();
   const finish = (error?: Error) => {
     stdin.off('data', onData);
