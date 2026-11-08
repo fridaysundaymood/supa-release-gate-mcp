@@ -68,5 +68,7 @@ jobs:
         working-directory: android-kit
       - run: npm ci
         working-directory: supa-release-gate-mcp
+      - run: npm run build
+        working-directory: supa-release-gate-mcp
       - run: node test/local-supabase.mjs
         working-directory: supa-release-gate-mcp
