@@ -185,7 +185,11 @@ async function protectPaths(paths: string[]): Promise<void> {
       ['-NoProfile', '-NonInteractive', '-Command', script],
       {
         env: {
-          ...process.env,
+          ...Object.fromEntries(
+            Object.entries(process.env).filter(
+              ([name]) => name.toLowerCase() !== 'psmodulepath',
+            ),
+          ),
           PSModulePath: resolve(
             process.env.SystemRoot,
             'System32',

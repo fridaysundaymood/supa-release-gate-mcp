@@ -43,8 +43,11 @@ it.skipIf(process.platform !== 'win32')(
   async () => {
     const { root, path } = await config();
     protectFixtureDirectory(root);
-    const previous = process.env.PSModulePath;
-    process.env.PSModulePath = root;
+    const previous = Object.entries(process.env).find(
+      ([name]) => name.toLowerCase() === 'psmodulepath',
+    );
+    delete process.env.PSModulePath;
+    process.env.PSMODULEPATH = root;
     try {
       await expect(loadReleaseConfig(path)).resolves.toBeDefined();
       execFileSync(
@@ -55,8 +58,8 @@ it.skipIf(process.platform !== 'win32')(
         /Untrusted write access/,
       );
     } finally {
-      if (previous === undefined) delete process.env.PSModulePath;
-      else process.env.PSModulePath = previous;
+      delete process.env.PSMODULEPATH;
+      if (previous) process.env[previous[0]] = previous[1];
     }
   },
 );
